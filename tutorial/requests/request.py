@@ -203,6 +203,114 @@ def post_a_multipart_encoded_file():
     # 如果用文本模式(text mode)打开文件，就可能会发生错误。
 
 
+def response_status_codes():
+    """响应状态码"""
+    # 我们可以检测响应状态码：
+    r = requests.get('http://httpbin.org/get')
+    print(r.status_code)
+    print("==============================================")
+    # 为方便引用，Requests还附带了一个内置的状态码查询对象：
+    print(r.status_code == requests.codes.ok)
+    print("==============================================")
+    print(requests.codes.internal_server_error)
+    print("==============================================")
+    # 如果发送了一个错误请求(一个 4XX 客户端错误，或者 5XX 服务器错误响应)
+    # 我们可以通过 Response.raise_for_status() 来抛出异常：
+    bad_r = requests.get('http://httpbin.org/status/404')
+    print(bad_r.status_code)
+    bad_r.raise_for_status()
+    # 但是，由于我们的例子中 r 的 status_code 是 200 ，当我们调用 raise_for_status() 时，得到的是：
+    # bad_r = requests.get('http://www.baidu.com')
+    # print(bad_r.status_code)
+    # bad_r.raise_for_status()
+
+
+def response_headers():
+    """响应头"""
+    # 我们可以查看以一个 Python 字典形式展示的服务器响应头：
+    r = requests.get("http://www.baidu.com")
+    print(r.headers)
+    # 但是这个字典比较特殊：它是仅为 HTTP 头部而生的。根据 RFC 2616， HTTP 头部是大小写不敏感的。
+    # 因此，我们可以使用任意大写形式来访问这些响应头字段：
+    print(r.headers['Content-Type'])
+    print(r.headers.get('content-type'))
+
+
+def cookie():
+    """Cookie"""
+    # 如果某个响应中包含一些 cookie，你可以快速访问它们：
+    url = 'http://www.baidu.com'
+    r = requests.get(url)
+    print(r)
+    print("==============================================")
+    print(r.cookies)
+    print(r.cookies['BDORZ'])
+    print("==============================================")
+    # 要想发送你的cookies到服务器，可以使用 cookies 参数：
+    url = 'http://httpbin.org/cookies'
+    cookies = dict(cookies_are='working')
+    r = requests.get(url, cookies=cookies)
+    print(r.text)
+    print("==============================================")
+    # Cookie 的返回对象为 RequestsCookieJar，
+    # 它的行为和字典类似，但接口更为完整，适合跨域名跨路径使用。
+    # 你还可以把 Cookie Jar 传到 Requests 中：
+    jar = requests.cookies.RequestsCookieJar()
+    jar.set('tasty_cookie', 'yum', domain='httpbin.org', path='/cookies')
+    jar.set('gross_cookie', 'blech', domain='httpbin.org', path='/elsewhere')
+    url = 'http://httpbin.org/cookies'
+    r = requests.get(url, cookies=jar)
+    print(r.text)
+    print("==============================================")
+
+
+def redirection_and_history():
+    """重定向与请求历史"""
+    # 默认情况下，除了 HEAD, Requests 会自动处理所有重定向。
+    # 可以使用响应对象的 history 方法来追踪重定向。
+    # Response.history 是一个 Response 对象的列表，为了完成请求而创建了这些对象。
+    # 这个对象列表按照从最老到最近的请求进行排序。
+    # 例如，Github 将所有的 HTTP 请求重定向到 HTTPS：
+    r = requests.get('http://github.com')
+    print(r.url)
+    print(r.status_code)
+    print(r.history)
+    print("==============================================")
+    # 如果你使用的是GET、OPTIONS、POST、PUT、PATCH 或者 DELETE，那么你可以通过 allow_redirects 参数禁用重定向处理：
+    r = requests.get('http://github.com', allow_redirects=False)
+    print(r.status_code)
+    print(r.history)
+    print("==============================================")
+    # 如果你使用了 HEAD，你也可以启用重定向：
+    r = requests.head('http://github.com', allow_redirects=True)
+    print(r.url)
+    print(r.history)
+    print("==============================================")
+
+
+def timeouts():
+    """超时"""
+    # 你可以告诉 requests 在经过以 timeout 参数设定的秒数时间之后停止等待响应。
+    # 基本上所有的生产代码都应该使用这一参数。
+    # 如果不使用，你的程序可能会永远失去响应：
+    r = requests.get('http://github.com', timeout=0.001)
+    print(r)
+
+    # 注意:
+    # timeout 仅对连接过程有效，与响应体的下载无关。
+    # timeout 并不是整个下载响应的时间限制，而是如果服务器在 timeout 秒内没有应答，将会引发一个异常
+    # (更精确地说，是在 timeout 秒内没有从基础套接字上接收到任何字节的数据时)
+
+
+def errors_and_exceptions():
+    """错误与异常"""
+    # 遇到网络问题（如：DNS 查询失败、拒绝连接等）时，Requests 会抛出一个 ConnectionError 异常。
+    # 如果 HTTP 请求返回了不成功的状态码， Response.raise_for_status() 会抛出一个 HTTPError 异常。
+    # 若请求超时，则抛出一个 Timeout 异常。
+    # 若请求超过了设定的最大重定向次数，则会抛出一个 TooManyRedirects 异常。
+    # 所有Requests显式抛出的异常都继承自 requests.exceptions.RequestException
+
+
 # 一个简单的demo
 # simple_request()
 
@@ -231,4 +339,22 @@ def post_a_multipart_encoded_file():
 # more_complicated_post_requests()
 
 # POST一个多部分编码(Multipart-Encoded)的文件
-post_a_multipart_encoded_file()
+# post_a_multipart_encoded_file()
+
+# 响应状态码
+# response_status_codes()
+
+# 响应头
+# response_headers()
+
+# cookie
+# cookie()
+
+# 重定向与请求历史
+# redirection_and_history()
+
+# 超时
+# timeouts()
+
+# 错误与异常
+errors_and_exceptions()
