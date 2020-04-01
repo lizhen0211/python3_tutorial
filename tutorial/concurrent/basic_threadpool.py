@@ -19,8 +19,9 @@
 # 线程池ThreadPoolExecutor简单使用
 
 # 参数times用来模拟下载的时间
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait, ALL_COMPLETED
 
 
 def down_video(times):
@@ -103,3 +104,28 @@ for data in executor.map(download_video, urls):
 # 重上面的输出结果看来，即便任务2比任务3先完成，
 # for循环输出的内容依旧是提示先完成的任务3再完成任务2，
 # 根据列表urls顺序输出，保证任务的顺序性！
+print("==============================================")
+
+
+# 3.wait
+# wait()方法有点类似线程的join()方法，能阻塞主线程，
+# 直到线程池中的所有的线程都操作完成！实例代码如下：
+# 参数times用来模拟网络请求的时间
+def download_video(index):
+    time.sleep(2)
+    print("download video {} finished at {}".format(index, time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())))
+    return index
+
+
+executor = ThreadPoolExecutor(max_workers=2)
+urls = [1, 2, 3, 4, 5]
+all_task = [executor.submit(download_video, (url)) for url in urls]
+
+wait(all_task, return_when=ALL_COMPLETED)
+
+print(threading.currentThread())
+
+# wait方法接收3个参数，等待的任务序列、超时时间以及等待条件。
+# 等待条件return_when默认为ALL_COMPLETED，表明要等待所有的任务都结束。
+# 可以看到运行结果中，确实是所有任务都完成了，主线程才打印出main。
+# 等待条件还可以设置为FIRST_COMPLETED，表示第一个任务完成就停止等待。
