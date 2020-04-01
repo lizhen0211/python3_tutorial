@@ -20,7 +20,7 @@
 
 # 参数times用来模拟下载的时间
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 def down_video(times):
@@ -40,4 +40,66 @@ print("取消任务2：", task2.cancel())
 time.sleep(4)
 print("任务1是否已经完成：", task1.done())
 # result方法可以获取task的执行结果，注意：这个方法是阻塞的。
-print(task1.result())
+print(task1.result())  # down_video 返回值
+print(task2.result())  # down_video 返回值
+print("==============================================")
+
+
+# 1.threadpool — 是一个比较老的模块了，现在虽然还有一些人在用，但已经不再是主流了；
+# 2.concurrent.futures — 目前线程池主要使用这个模块，主流模块；
+# ThreadPoolExecutor常用函数
+
+# --1.as_completed
+# 虽然 done() 函数提供了判断任务是否结束的方法，但是并不是太实用，
+# 因为我们并不知道线程到底什么时候结束，需要一直判断每个任务有没有结束。
+# 这时就可以使用 as_completed() 方法一次取出所有任务的结果。
+# as_completed() 方法是一个生成器，在没有任务完成的时候，会阻塞，
+# 在有某个任务完成的时候，就能继续执行for循环后面的语句，然后继续阻塞住，循环到所有的任务结束。
+
+# 参数times用来模拟网络请求的时间
+def download_video(index):
+    time.sleep(2)
+    print("download video {} finished at {}".format(index, time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())))
+    return index
+
+
+executor = ThreadPoolExecutor(max_workers=2)
+urls = [1, 2, 3, 4, 5]
+all_task = [executor.submit(download_video, (url)) for url in urls]
+
+for task in as_completed(all_task):
+    data = task.result()
+    print("任务{} down load success".format(data))
+
+# 5个任务，2个线程，由于在线程池构造的时候允许同时最多执行2个线程，
+# 所以同时执行任务1和任务2，重代码的输出结果来看，
+# 任务1和任务2执行后，for循环进入阻塞状态，
+# 直到任务1或者任务2结束之后才会for才会继续执行任务3/任务4，
+# 并保证同时执行的最多只有两个任务
+
+print("==============================================")
+
+
+# 2--map
+# 和as_completed() 方法不同的是：map()方法能保证任务的顺序性，
+# 举个例子：如果同时下载5个视频，就算第二个视频比第一个视频先下载完成，
+# 也会阻塞等待第一个视频下载完成并通知主线程之后，
+# 第二个下载完成的视频才回通知主线程，保证按照顺序完成任务，下面举个例子说明一下：
+
+
+# 参数times用来模拟网络请求的时间
+def download_video(index):
+    time.sleep(index)
+    print("download video {} finished at {}".format(index, time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())))
+    return index
+
+
+executor = ThreadPoolExecutor(max_workers=2)
+urls = [3, 2, 1, 4, 5]
+
+for data in executor.map(download_video, urls):
+    print("任务{} down load success".format(data))
+
+# 重上面的输出结果看来，即便任务2比任务3先完成，
+# for循环输出的内容依旧是提示先完成的任务3再完成任务2，
+# 根据列表urls顺序输出，保证任务的顺序性！
