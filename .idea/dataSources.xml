@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="DataSourceManagerImpl" format="xml" multifile-model="true">
+    <data-source source="LOCAL" name="normandy_apollo_y@42.4.50.207" uuid="f065fc75-9560-4617-850f-33b4fedbccf9">
+      <driver-ref>postgresql</driver-ref>
+      <synchronize>true</synchronize>
+      <jdbc-driver>org.postgresql.Driver</jdbc-driver>
+      <jdbc-url>jdbc:postgresql://42.4.50.207:65432/normandy_apollo_y</jdbc-url>
+    </data-source>
+    <data-source source="LOCAL" name="normandy_apollo_d@42.4.50.207" uuid="5d2125ce-0ed5-4f9b-8b32-c30c095ef2b6">
+      <driver-ref>postgresql</driver-ref>
+      <synchronize>true</synchronize>
+      <jdbc-driver>org.postgresql.Driver</jdbc-driver>
+      <jdbc-url>jdbc:postgresql://42.4.50.207:65432/normandy_apollo_d</jdbc-url>
+    </data-source>
+  </component>
+</project>
