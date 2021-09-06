@@ -22,12 +22,14 @@ print("当前时间戳为:", ticks)
 
 # 不传参数为当前时间:
 print(time.localtime())
-# 传参数为指定时间
+# 传参数为指定时间、返回 struct_time
 localtime = time.localtime(time.time())
+print(type(localtime))
 print("本地时间为 :", localtime)
 
 # 获取格式化的时间
 # 你可以根据需求选取各种格式，但是最简单的获取可读的时间模式的函数是asctime():
+# Python time asctime() 函数接受时间元组并返回一个可读的形式为"Tue Dec 11 18:07:14 2008"
 localtime = time.asctime(time.localtime(time.time()))
 print(type(localtime))
 print("本地时间为 :", localtime)
@@ -46,7 +48,13 @@ print(time.strftime("%a %b %d %H:%M:%S %Y", time.localtime()))
 
 # 将格式字符串转换为时间戳
 a = "Sat Mar 28 22:24:24 2016"
-print(time.mktime(time.strptime(a, "%a %b %d %H:%M:%S %Y")))
+# Python time strptime() 函数根据指定的格式把一个时间字符串解析为时间元组。
+# 语法
+# time.strptime(string[, format])
+struct_time = time.strptime(a, "%a %b %d %H:%M:%S %Y")
+
+# Python time mktime() 函数执行与gmtime(), localtime()相反的操作，它接收struct_time对象作为参数，返回用秒数来表示时间的浮点数。
+print(time.mktime(struct_time))
 
 # python中时间日期格式化符号：
 
