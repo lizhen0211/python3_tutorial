@@ -42,6 +42,15 @@ print("本地时间为 :", localtime)
 print(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
 # 时间加减
 print(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 3 * 24 * 60 * 60)))
+# 时间计算
+print(datetime.date.today() - datetime.timedelta(days=3))
+threeDayAgo = (datetime.datetime.now() - datetime.timedelta(days=3))
+print(threeDayAgo)
+# struct_time
+print(threeDayAgo.timetuple())
+# 转换为时间戳
+timeStamp = int(time.mktime(threeDayAgo.timetuple()))
+print(timeStamp)
 
 # 格式化成Sat Mar 28 22:24:24 2016形式
 print(time.strftime("%a %b %d %H:%M:%S %Y", time.localtime()))
