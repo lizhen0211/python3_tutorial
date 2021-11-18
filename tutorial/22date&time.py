@@ -40,6 +40,8 @@ print("本地时间为 :", localtime)
 
 # 格式化成2016-03-20 11:45:39形式
 print(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()))
+print(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+print(type(datetime.datetime.now()))
 # 时间加减
 print(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 3 * 24 * 60 * 60)))
 # 时间计算
