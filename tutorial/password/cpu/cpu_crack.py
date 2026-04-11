@@ -1,7 +1,19 @@
 import itertools
 import os
-import pyzipper  # 需要安装: pip install pyzipper
+import pyzipper
 from tqdm import tqdm
+
+
+def format_number(num):
+    """将数字格式化为带单位的字符串（K, M, B）"""
+    if num >= 1_000_000_000:
+        return f"{num/1_000_000_000:.1f}B"
+    elif num >= 1_000_000:
+        return f"{num/1_000_000:.1f}M"
+    elif num >= 1_000:
+        return f"{num/1_000:.1f}K"
+    else:
+        return str(num)
 
 
 def crack_zip_optimized(zip_path, charset, min_len=1, max_len=4):
@@ -31,7 +43,8 @@ def crack_zip_optimized(zip_path, charset, min_len=1, max_len=4):
 
         # 计算总尝试次数（从 min_len 到 max_len）
         total = sum(len(charset) ** l for l in range(min_len, max_len + 1))
-        print(f"总尝试次数: {total}")
+        # ✅ 修改点：使用自适应单位输出总尝试次数
+        print(f"总尝试次数: {format_number(total)}")
 
         with tqdm(total=total, unit="pwd", desc="暴力破解") as pbar:
             try:
@@ -65,11 +78,13 @@ if __name__ == '__main__':
     # pwd = crack_zip_optimized('9347.zip', charset='0123456789', min_len=1, max_len=4)
 
     # 示例2：密码长度在 1~6 位纯数字（你的密码 136758 位于此范围）
-    pwd = crack_zip_optimized('../136758.zip', charset='0123456789', min_len=1, max_len=6)
-    if pwd is not None:
-        print(f"找到密码: {pwd}")
+    # pwd = crack_zip_optimized('../136758.zip', charset='0123456789', min_len=1, max_len=6)
+    # if pwd is not None:
+    #     print(f"找到密码: {pwd}")
 
     # 示例3：密码长度在 1~6 位 数字+小写字母组合
+
+    # 总尝试次数: 2.2B，大约花费500小时时间。 字符集包含 95 个字符
     pwd = crack_zip_optimized('../es68z4.zip', charset='0123456789abcdefghijklmnopqrstuvwxyz', min_len=6, max_len=6)
     if pwd is not None:
         print(f"找到密码: {pwd}")
