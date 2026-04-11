@@ -61,9 +61,16 @@ def crack_zip_optimized(zip_path, charset, min_len=1, max_len=4):
 
 
 if __name__ == '__main__':
-    # pwd = crack_zip_optimized('9347.zip', charset='0123456789', min_len=1, max_len=4)
     # 示例1：密码长度在 1~4 位纯数字（你的密码 9347 位于此范围）
+    # pwd = crack_zip_optimized('9347.zip', charset='0123456789', min_len=1, max_len=4)
+
+    # 示例2：密码长度在 1~6 位纯数字（你的密码 136758 位于此范围）
     pwd = crack_zip_optimized('../136758.zip', charset='0123456789', min_len=1, max_len=6)
+    if pwd is not None:
+        print(f"找到密码: {pwd}")
+
+    # 示例3：密码长度在 1~6 位 数字+小写字母组合
+    pwd = crack_zip_optimized('../es68z4.zip', charset='0123456789abcdefghijklmnopqrstuvwxyz', min_len=6, max_len=6)
     if pwd is not None:
         print(f"找到密码: {pwd}")
 
