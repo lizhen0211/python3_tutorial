@@ -9,16 +9,15 @@ from typing import Optional
 CONFIG = {
     "hashcat_path": r"D:\dev_code\python3_tutorial\tutorial\password\gpu\hashcat-6.2.6\hashcat.exe",
     "zip2john_path": r"D:\dev_code\python3_tutorial\tutorial\password\gpu\john-1.9.0-jumbo-1-win64\run\zip2john.exe",
-    "gpu_ids": None,           # 例如 "1,2" 或 None（使用默认设备）
-    "optimize": True,          # -O 优化内核
-    "workload": 3,             # -w 3 高负载
-    "extra_args": ["--force"], # 额外参数
-    "fallback_to_cpu": False,  # 如果 GPU 设备出错，自动回退到 CPU（添加 -D 1）
+    "gpu_ids": None,
+    "optimize": True,
+    "workload": 3,
+    "extra_args": ["--force"],
+    "fallback_to_cpu": False,
 }
 # =====================================================
 
 def format_number(n: int) -> str:
-    """将大数字格式化为带单位的字符串，如 1234567 -> 1.23M"""
     if n < 1_000:
         return str(n)
     if n < 1_000_000:
@@ -45,7 +44,6 @@ def run_command(cmd, description="", cwd=None):
         return False, "", str(e)
 
 def extract_clean_hash(zip_path: str) -> Optional[str]:
-    """使用 zip2john 提取哈希并清理为纯哈希格式，返回哈希文件路径"""
     if not os.path.exists(CONFIG["zip2john_path"]):
         print("[!] zip2john 不存在")
         return None
@@ -71,18 +69,14 @@ def extract_clean_hash(zip_path: str) -> Optional[str]:
     return None
 
 def read_password_from_potfile(hash_file: str) -> Optional[str]:
-    """
-    从 hashcat.potfile 中读取给定哈希对应的密码。
-    potfile 默认位于 hashcat.exe 所在目录，文件名为 hashcat.potfile。
-    格式：hash:password
-    """
+    """从 potfile 中精确匹配当前哈希的密码"""
     potfile_path = os.path.join(os.path.dirname(CONFIG["hashcat_path"]), "hashcat.potfile")
     if not os.path.exists(potfile_path):
         return None
 
-    # 读取原始哈希内容（用于匹配）
     with open(hash_file, 'r', encoding='ascii') as f:
         target_hash = f.read().strip()
+    print(f"[DEBUG] 在 potfile 中查找哈希: {target_hash}")
 
     with open(potfile_path, 'r', encoding='utf-8', errors='ignore') as f:
         for line in f:
@@ -90,13 +84,15 @@ def read_password_from_potfile(hash_file: str) -> Optional[str]:
             if ':' not in line:
                 continue
             h, pwd = line.split(':', 1)
-            # 如果 potfile 中的哈希包含目标哈希（或相等）
-            if target_hash in h or h == target_hash:
+            h = h.strip()
+            pwd = pwd.strip()
+            if h == target_hash:
+                print(f"[DEBUG] 找到精确匹配: {pwd}")
                 return pwd
+    print("[DEBUG] 未找到精确匹配")
     return None
 
 def test_hash_load(hash_file: str, mode: int) -> bool:
-    """测试某个模式是否能加载哈希"""
     cmd = [CONFIG["hashcat_path"], "-m", str(mode), hash_file, "--stdout", "--force"]
     ok, stdout, stderr = run_command(cmd, f"测试模式 {mode}", cwd=os.path.dirname(CONFIG["hashcat_path"]))
     if "No hashes loaded" in stderr or "No such file" in stderr:
@@ -104,7 +100,6 @@ def test_hash_load(hash_file: str, mode: int) -> bool:
     return ok and "No hashes" not in stderr and "No such file" not in stderr
 
 def detect_working_mode(hash_file: str) -> Optional[int]:
-    """自动检测可用的 hashcat 模式"""
     for mode in [13600, 17200, 17210, 17220, 17225]:
         print(f"[*] 尝试模式 {mode}...")
         if test_hash_load(hash_file, mode):
@@ -113,7 +108,6 @@ def detect_working_mode(hash_file: str) -> Optional[int]:
     return None
 
 def build_base_cmd(hash_file: str, mode: int, output_file: str) -> list:
-    """构建 hashcat 基础命令（不含掩码部分）"""
     cmd = [CONFIG["hashcat_path"], "-m", str(mode), "-a", "3", hash_file,
            "-o", output_file, "--status", "--status-timer=1"]
     if CONFIG["gpu_ids"]:
@@ -122,24 +116,25 @@ def build_base_cmd(hash_file: str, mode: int, output_file: str) -> list:
         cmd.append("-O")
     cmd.extend(["-w", str(CONFIG["workload"])])
     cmd.extend(CONFIG["extra_args"])
-
-    # 如果开启了 CPU 回退且没有指定 GPU ID，添加 -D 1 强制使用 CPU
     if CONFIG["fallback_to_cpu"] and not CONFIG["gpu_ids"]:
         cmd.extend(["-D", "1"])
     return cmd
 
 def run_hashcat_cmd(cmd, total: int, description: str, hash_file: str):
-    """
-    执行 hashcat 命令，捕获输出，并从输出文件或 potfile 中读取密码。
-    """
     print(f"[*] {description}: {' '.join(cmd)}")
-    # 同时输出原始数字（带千位分隔符）和格式化数字
     formatted_total = format_number(total)
     print(f"[*] 总尝试次数: {total:,} ({formatted_total})")
-
-    # 提示用户可能较长时间
     if total > 50_000_000:
-        print(f"[*] 尝试次数较多，请耐心等待，Hashcat 初始化可能需要几十秒...")
+        print(f"[*] 尝试次数较多，请耐心等待...")
+
+    # 确保输出文件不存在（避免读到旧结果）
+    output_file = None
+    for i, arg in enumerate(cmd):
+        if arg == "-o" and i+1 < len(cmd):
+            output_file = cmd[i+1]
+            break
+    if output_file and os.path.exists(output_file):
+        os.remove(output_file)
 
     try:
         result = subprocess.run(
@@ -158,7 +153,6 @@ def run_hashcat_cmd(cmd, total: int, description: str, hash_file: str):
         print(f"[!] 执行异常: {e}")
         return False, None
 
-    # 打印 stdout 和 stderr
     if result.stdout:
         print("\n[STDOUT]")
         print(result.stdout)
@@ -166,39 +160,44 @@ def run_hashcat_cmd(cmd, total: int, description: str, hash_file: str):
         print("\n[STDERR]")
         print(result.stderr)
 
+    # 检查是否因为 potfile 中已有哈希而跳过
+    if "All hashes found as potfile" in result.stdout or "All hashes found as potfile" in result.stderr:
+        print("[*] 哈希已在 potfile 中，尝试读取密码...")
+        pwd = read_password_from_potfile(hash_file)
+        if pwd:
+            print(f"\n[+] 从 potfile 中找到密码: {pwd}")
+            return True, pwd
+        else:
+            print("[!] potfile 中存在该哈希？但读取失败")
+            return False, None
+
     if result.returncode != 0:
         print(f"\n[!] Hashcat 返回非零状态码: {result.returncode}")
-        # 即使返回非零，也可能 potfile 中已有密码
+        # 也许密码已经存在？尝试 potfile
         pwd = read_password_from_potfile(hash_file)
         if pwd:
             print(f"\n[+] 从 potfile 中找到密码: {pwd}")
             return True, pwd
         return False, None
 
-    # 检查输出文件（-o 指定的文件）
-    output_file = None
-    for i, arg in enumerate(cmd):
-        if arg == "-o" and i+1 < len(cmd):
-            output_file = cmd[i+1]
-            break
+    # 从输出文件读取密码
     if output_file and os.path.exists(output_file):
         with open(output_file, 'r', encoding='utf-8', errors='ignore') as f:
             lines = f.read().strip().splitlines()
-            # 优先查找包含冒号的行（hash:password 格式）
             for line in lines:
                 if ':' in line:
                     pwd = line.split(':', 1)[1].strip()
                     if pwd:
                         print(f"\n[+] 破解成功！密码: {pwd}")
                         return True, pwd
-            # 如果没有冒号行，则取最后一行作为密码（兼容旧格式）
+            # 如果没有冒号，可能是纯密码
             if lines:
                 pwd = lines[-1].strip()
                 if pwd:
                     print(f"\n[+] 破解成功！密码: {pwd}")
                     return True, pwd
 
-    # 从 stdout 中尝试匹配（某些模式直接输出）
+    # 从 stdout 匹配（备用）
     success_re = re.compile(r'^(\$pkzip\$[^:]+|\$zip2\$[^:]+):(.+)$')
     for line in result.stdout.splitlines():
         sm = success_re.match(line.strip())
@@ -207,7 +206,7 @@ def run_hashcat_cmd(cmd, total: int, description: str, hash_file: str):
             print(f"\n[+] 破解成功！密码: {pwd}")
             return True, pwd
 
-    # 最后检查 potfile
+    # 最后尝试 potfile
     pwd = read_password_from_potfile(hash_file)
     if pwd:
         print(f"\n[+] 从 potfile 中找到密码: {pwd}")
@@ -236,16 +235,6 @@ def run_hashcat_multi_charset_mask(hash_file: str, must_set: str, other_set: str
 
 def crack_zip_hashcat(zip_path: str, charset: str, min_len: int, max_len: int,
                       must_include: Optional[str] = None, exclude: Optional[str] = None) -> Optional[str]:
-    """
-    破解 ZIP 密码（GPU 加速）
-    :param zip_path:      ZIP 文件路径
-    :param charset:       完整字符集（字符串）
-    :param min_len:       最小密码长度
-    :param max_len:       最大密码长度
-    :param must_include:  必须包含的字符集（密码中至少出现其中一个字符），None 表示无要求
-    :param exclude:       排除的字符（从 charset 中移除），None 表示无排除
-    :return:              密码字符串，未找到返回 None
-    """
     if must_include is None:
         must_include = ''
     if exclude is None:
@@ -279,9 +268,9 @@ def crack_zip_hashcat(zip_path: str, charset: str, min_len: int, max_len: int,
         return None
 
     with open(hash_file, 'r') as f:
-        print(f"[DEBUG] 哈希内容: {f.read().strip()}")
+        hash_content = f.read().strip()
+        print(f"[DEBUG] 哈希内容: {hash_content}")
 
-    # 提前检查 potfile 中是否已有密码
     print("\n[步骤1.5] 检查 potfile 中是否已有密码")
     existing_pwd = read_password_from_potfile(hash_file)
     if existing_pwd:
@@ -302,7 +291,6 @@ def crack_zip_hashcat(zip_path: str, charset: str, min_len: int, max_len: int,
         print("[!] 必须包含的字符都不在有效字符集中，无法满足条件")
         return None
 
-    # 检查输出目录权限，若不可写则回退到临时目录
     base_dir = os.path.dirname(hash_file)
     test_file = os.path.join(base_dir, ".write_test")
     try:
@@ -339,7 +327,7 @@ def crack_zip_hashcat(zip_path: str, charset: str, min_len: int, max_len: int,
 
 if __name__ == '__main__':
     pwd = crack_zip_hashcat(
-        zip_path='../6fvw42.zip',      # 请修改为您的 ZIP 文件路径
+        zip_path='../6fvw42.zip',
         charset='0123456789abcdefghijklmnopqrstuvwxyz',
         min_len=6, max_len=6,
         must_include='', exclude=''
