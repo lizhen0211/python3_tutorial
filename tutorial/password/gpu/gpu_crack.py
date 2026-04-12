@@ -17,6 +17,18 @@ CONFIG = {
 }
 # =====================================================
 
+def format_number(n: int) -> str:
+    """将大数字格式化为带单位的字符串，如 1234567 -> 1.23M"""
+    if n < 1_000:
+        return str(n)
+    if n < 1_000_000:
+        return f"{n/1_000:.2f}K"
+    if n < 1_000_000_000:
+        return f"{n/1_000_000:.2f}M"
+    if n < 1_000_000_000_000:
+        return f"{n/1_000_000_000:.2f}B"
+    return f"{n/1_000_000_000_000:.2f}T"
+
 def run_command(cmd, description="", cwd=None):
     print(f"[*] {description}: {' '.join(cmd)}")
     try:
@@ -121,7 +133,13 @@ def run_hashcat_cmd(cmd, total: int, description: str, hash_file: str):
     执行 hashcat 命令，捕获输出，并从输出文件或 potfile 中读取密码。
     """
     print(f"[*] {description}: {' '.join(cmd)}")
-    print(f"[*] 总尝试次数: {total:,}")
+    # 同时输出原始数字（带千位分隔符）和格式化数字
+    formatted_total = format_number(total)
+    print(f"[*] 总尝试次数: {total:,} ({formatted_total})")
+
+    # 提示用户可能较长时间
+    if total > 50_000_000:
+        print(f"[*] 尝试次数较多，请耐心等待，Hashcat 初始化可能需要几十秒...")
 
     try:
         result = subprocess.run(
@@ -140,7 +158,7 @@ def run_hashcat_cmd(cmd, total: int, description: str, hash_file: str):
         print(f"[!] 执行异常: {e}")
         return False, None
 
-    # 打印 stdout 和 stderr 以便调试
+    # 打印 stdout 和 stderr
     if result.stdout:
         print("\n[STDOUT]")
         print(result.stdout)
@@ -150,7 +168,7 @@ def run_hashcat_cmd(cmd, total: int, description: str, hash_file: str):
 
     if result.returncode != 0:
         print(f"\n[!] Hashcat 返回非零状态码: {result.returncode}")
-        # 即使返回非零，也可能 potfile 中已有密码？通常不会，但为保险也检查一下
+        # 即使返回非零，也可能 potfile 中已有密码
         pwd = read_password_from_potfile(hash_file)
         if pwd:
             print(f"\n[+] 从 potfile 中找到密码: {pwd}")
@@ -165,14 +183,20 @@ def run_hashcat_cmd(cmd, total: int, description: str, hash_file: str):
             break
     if output_file and os.path.exists(output_file):
         with open(output_file, 'r', encoding='utf-8', errors='ignore') as f:
-            content = f.read().strip()
-            if content:
-                if ':' in content:
-                    pwd = content.split(':', 1)[1]
-                else:
-                    pwd = content
-                print(f"\n[+] 破解成功！密码: {pwd}")
-                return True, pwd
+            lines = f.read().strip().splitlines()
+            # 优先查找包含冒号的行（hash:password 格式）
+            for line in lines:
+                if ':' in line:
+                    pwd = line.split(':', 1)[1].strip()
+                    if pwd:
+                        print(f"\n[+] 破解成功！密码: {pwd}")
+                        return True, pwd
+            # 如果没有冒号行，则取最后一行作为密码（兼容旧格式）
+            if lines:
+                pwd = lines[-1].strip()
+                if pwd:
+                    print(f"\n[+] 破解成功！密码: {pwd}")
+                    return True, pwd
 
     # 从 stdout 中尝试匹配（某些模式直接输出）
     success_re = re.compile(r'^(\$pkzip\$[^:]+|\$zip2\$[^:]+):(.+)$')
@@ -315,10 +339,10 @@ def crack_zip_hashcat(zip_path: str, charset: str, min_len: int, max_len: int,
 
 if __name__ == '__main__':
     pwd = crack_zip_hashcat(
-        zip_path='../es68z4.zip',
+        zip_path='../6fvw42.zip',      # 请修改为您的 ZIP 文件路径
         charset='0123456789abcdefghijklmnopqrstuvwxyz',
         min_len=6, max_len=6,
-        must_include='e6', exclude='01lLpt'
+        must_include='', exclude=''
     )
     if pwd:
         print(f"找到密码: {pwd}")
