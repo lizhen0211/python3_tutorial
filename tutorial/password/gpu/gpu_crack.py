@@ -5,7 +5,7 @@ import sys
 import tempfile
 import threading
 import time
-from typing import Optional
+from typing import Optional, List, Tuple
 from tqdm import tqdm
 
 # ==================== 配置区域（请根据实际路径修改） ====================
@@ -109,8 +109,12 @@ def detect_working_mode(hash_file: str) -> Optional[int]:
             return mode
     return None
 
-def build_base_cmd(hash_file: str, mode: int, output_file: str) -> list:
-    cmd = [CONFIG["hashcat_path"], "-m", str(mode), "-a", "3", hash_file,
+def build_base_cmd(hash_file: str, mode: int, output_file: str, attack_mode: int = 3) -> list:
+    """
+    构建 hashcat 基础命令
+    attack_mode: 0=字典, 3=掩码, 6=混合, 7=基于规则的字典
+    """
+    cmd = [CONFIG["hashcat_path"], "-m", str(mode), "-a", str(attack_mode), hash_file,
            "-o", output_file, "--status", "--status-timer=1"]
     if CONFIG["gpu_ids"]:
         cmd.extend(["-d", CONFIG["gpu_ids"]])
@@ -188,8 +192,6 @@ def run_hashcat_cmd(cmd, total: int, description: str, hash_file: str):
                 pbar.refresh()
                 progress_received = True
                 last_progress_time = time.time()
-                # 可选：打印调试信息
-                # print(f"\n[DEBUG] 进度更新: {current}/{total_attempts}")
 
     def read_stdout():
         for _ in process.stdout:
@@ -212,7 +214,6 @@ def run_hashcat_cmd(cmd, total: int, description: str, hash_file: str):
             for line in stderr_lines[-10:]:
                 print(f"    {line.rstrip()}")
             print("[!] 请检查上述输出，常见原因：设备不支持、权限问题、哈希格式错误。")
-            # 可以选择终止进程，或者继续等待
             break
         if progress_received and time.time() - last_progress_time > 30:
             print("\n[!] 警告: 30秒内无进度更新，可能 Hashcat 卡住。")
@@ -272,9 +273,35 @@ def run_hashcat_cmd(cmd, total: int, description: str, hash_file: str):
     print("[*] 未找到密码")
     return False, None
 
+def dictionary_attack(hash_file: str, mode: int, dict_paths: List[str]) -> Tuple[bool, Optional[str]]:
+    """
+    字典攻击（纯字典，-a 0）
+    依次尝试多个字典文件，返回 (成功标志, 密码)
+    """
+    output_dir = os.path.dirname(hash_file)
+    for dict_file in dict_paths:
+        if not os.path.exists(dict_file):
+            print(f"[!] 字典文件不存在: {dict_file}")
+            continue
+        print(f"\n[字典攻击] 使用字典: {dict_file}")
+        # 计算字典行数（用于进度条）
+        try:
+            with open(dict_file, 'r', encoding='utf-8', errors='ignore') as f:
+                total_lines = sum(1 for _ in f)
+        except:
+            total_lines = 0
+            print("[*] 无法计算字典行数，进度条将不可用")
+        output_file = os.path.join(output_dir, f"hashcat_dict_out_{os.path.basename(dict_file)}.txt")
+        cmd = build_base_cmd(hash_file, mode, output_file, attack_mode=0)
+        cmd.append(dict_file)
+        ok, pwd = run_hashcat_cmd(cmd, total_lines, f"字典攻击 ({os.path.basename(dict_file)})", hash_file)
+        if ok:
+            return True, pwd
+    return False, None
+
 def run_hashcat_mask_with_charset(hash_file: str, charset: str, length: int, mode: int, output_file: str):
     total = len(charset) ** length
-    cmd = build_base_cmd(hash_file, mode, output_file)
+    cmd = build_base_cmd(hash_file, mode, output_file, attack_mode=3)
     cmd.extend(["-1", charset, "?1" * length])
     return run_hashcat_cmd(cmd, total, f"暴力 {length}位 ({len(charset)}字符)", hash_file)
 
@@ -285,13 +312,29 @@ def run_hashcat_multi_charset_mask(hash_file: str, must_set: str, other_set: str
         mask_chars[pos] = '?1'
     mask = ''.join(mask_chars)
     total = (len(must_set) ** len(positions)) * (len(other_set) ** (length - len(positions)))
-    cmd = build_base_cmd(hash_file, mode, output_file)
+    cmd = build_base_cmd(hash_file, mode, output_file, attack_mode=3)
     cmd.extend(["-1", must_set, "-2", other_set, mask])
     desc = f"必须包含 {len(positions)}个位置 (总组合 {total:.2e})"
     return run_hashcat_cmd(cmd, total, desc, hash_file)
 
-def crack_zip_hashcat(zip_path: str, charset: str, min_len: int, max_len: int,
-                      must_include: Optional[str] = None, exclude: Optional[str] = None) -> Optional[str]:
+def crack_zip_hashcat(zip_path: str,
+                      dict_paths: Optional[List[str]] = None,
+                      charset: str = "0123456789abcdefghijklmnopqrstuvwxyz",
+                      min_len: int = 4,
+                      max_len: int = 8,
+                      must_include: Optional[str] = None,
+                      exclude: Optional[str] = None) -> Optional[str]:
+    """
+    智能破解 ZIP 密码
+    :param zip_path:      ZIP 文件路径
+    :param dict_paths:    字典文件路径列表（例如 ['rockyou.txt']），若提供则优先尝试字典攻击
+    :param charset:       暴力破解使用的字符集
+    :param min_len:       最小密码长度
+    :param max_len:       最大密码长度
+    :param must_include:  必须包含的字符集
+    :param exclude:       排除的字符集
+    :return:              密码字符串，未找到返回 None
+    """
     if must_include is None:
         must_include = ''
     if exclude is None:
@@ -299,14 +342,15 @@ def crack_zip_hashcat(zip_path: str, charset: str, min_len: int, max_len: int,
 
     print("\n[参数配置]")
     print(f"  ZIP文件: {zip_path}")
-    print(f"  原始字符集 (charset): {charset} (长度 {len(charset)})")
-    print(f"  必须包含字符 (must_include): {must_include if must_include else '(无)'}")
-    print(f"  排除字符 (exclude): {exclude if exclude else '(无)'}")
+    print(f"  字典文件: {dict_paths if dict_paths else '(无)'}")
+    print(f"  暴力字符集: {charset} (长度 {len(charset)})")
+    print(f"  必须包含: {must_include if must_include else '(无)'}")
+    print(f"  排除字符: {exclude if exclude else '(无)'}")
     print(f"  密码长度范围: {min_len} ~ {max_len}")
 
     effective_charset = ''.join(ch for ch in charset if ch not in exclude)
     must_set = ''.join(ch for ch in must_include if ch in effective_charset)
-    print(f"\n[最终字符集]")
+    print(f"\n[最终暴力字符集]")
     print(f"  有效字符集: {effective_charset} (长度 {len(effective_charset)})")
     if must_set:
         print(f"  必须包含字符集: {must_set} (长度 {len(must_set)})")
@@ -341,6 +385,16 @@ def crack_zip_hashcat(zip_path: str, charset: str, min_len: int, max_len: int,
         return None
     print(f"[*] 使用模式 {working_mode}")
 
+    # ========== 优先尝试字典攻击 ==========
+    if dict_paths:
+        print("\n========== 开始字典攻击 ==========")
+        ok, pwd = dictionary_attack(hash_file, working_mode, dict_paths)
+        if ok:
+            return pwd
+    else:
+        print("[*] 未提供字典文件，跳过字典攻击")
+
+    # ========== 后续进行暴力破解 ==========
     if not effective_charset:
         print("[!] 有效字符集为空")
         return None
@@ -360,8 +414,8 @@ def crack_zip_hashcat(zip_path: str, charset: str, min_len: int, max_len: int,
         output_dir = tempfile.gettempdir()
 
     for length in range(min_len, max_len + 1):
-        print(f"\n========== 尝试长度 {length} ==========")
-        output_file = os.path.join(output_dir, f"hashcat_out_{length}.txt")
+        print(f"\n========== 暴力破解长度 {length} ==========")
+        output_file = os.path.join(output_dir, f"hashcat_mask_out_{length}.txt")
 
         if not must_set:
             ok, pwd = run_hashcat_mask_with_charset(hash_file, effective_charset,
@@ -382,12 +436,134 @@ def crack_zip_hashcat(zip_path: str, charset: str, min_len: int, max_len: int,
 
     return None
 
+# 纯数字（6-8位）
+# 小写字母（排除混淆）
+# 生日日期（8位数字）
+# 数字+小写+必须包含数字
+# 键盘顺序
+# 数字+小写（兜底）
+# 数字+大小写字母（如果前6个都失败）
+# 全可打印ASCII（最后手段）
+
 if __name__ == '__main__':
+    # 示例：使用 rockyou.txt 字典优先攻击，如果失败则回退到纯暴力
+    # 请根据实际情况修改 rockyou.txt 的路径
+    rockyou_path = '../rockyou.txt'   # 修改为你的 rockyou.txt 实际路径
+    if not os.path.exists(rockyou_path):
+        print(f"[!] 字典文件不存在: {rockyou_path}，将跳过字典攻击")
+        rockyou_path = None
+
+    # ========================假设函数支持字典路径列表========================
     pwd = crack_zip_hashcat(
-        zip_path='../6fvw42.zip',
-        charset='0123456789abcdefghijklmnopqrstuvwxyz',
-        min_len=6, max_len=6,
-        must_include='', exclude=''
+        zip_path='../136758.zip',
+        dict_paths=['/usr/share/wordlists/rockyou.txt'],
+        charset='',
+        min_len=0,
+        max_len=0,
+        must_include='',
+        exclude=''
     )
     if pwd:
         print(f"找到密码: {pwd}")
+        exit()
+    # ========================假设函数支持字典路径列表========================
+
+    # pwd = crack_zip_hashcat(
+    #     zip_path='../136758.zip',
+    #     dict_paths=[rockyou_path] if rockyou_path else None,
+    #     charset='0123456789abcdefghijklmnopqrstuvwxyz',
+    #     min_len=6, max_len=10,
+    #     must_include='', exclude=''
+    # )
+    # if pwd:
+    #     print(f"找到密码: {pwd}")
+
+    # ==================== 策略1：纯数字（最常见，6-8位） ====================
+    # 适用于下载站、论坛附件等，如 123456、888888、202306
+    pwd = crack_zip_hashcat(
+        zip_path='../136758.zip',
+        charset='0123456789',
+        min_len=6,
+        max_len=8,
+        must_include='',
+        exclude=''
+    )
+    if pwd:
+        print(f"找到密码: {pwd}")
+        exit()
+    # ==================== 策略1：纯数字（最常见，6-8位） ====================
+
+    # ==================== 策略2：小写字母 + 排除混淆字符（4-8位） ====================
+    # 排除易混淆的 l,1,o,0，减少无效尝试，适用于简单单词如 admin、ctf、password
+    pwd = crack_zip_hashcat(
+        zip_path='../136758.zip',
+        charset='abcdefghijklmnopqrstuvwxyz',
+        min_len=4,
+        max_len=8,
+        must_include='',
+        exclude='l1o0'  # 排除易混淆字符
+    )
+    if pwd:
+        print(f"找到密码: {pwd}")
+        exit()
+    # ==================== 策略2：小写字母 + 排除混淆字符（4-8位） ====================
+
+    # ==================== 策略3：8位生日日期（纯数字，掩码优化） ====================
+    # 常见生日格式如 19900101，可配合掩码，但这里用纯数字暴力（长度固定8）
+    pwd = crack_zip_hashcat(
+        zip_path='../136758.zip',
+        charset='0123456789',
+        min_len=8,
+        max_len=8,
+        must_include='',
+        exclude=''
+    )
+    if pwd:
+        print(f"找到密码: {pwd}")
+        exit()
+    # ==================== 策略3：8位生日日期（纯数字，掩码优化） ====================
+
+    # ==================== 策略4：数字+小写混合，且必须包含至少一个数字（6-10位） ====================
+    # 适用于必须包含数字的弱口令，如 abc123、passw0rd
+    pwd = crack_zip_hashcat(
+        zip_path='../136758.zip',
+        charset='0123456789abcdefghijklmnopqrstuvwxyz',
+        min_len=6,
+        max_len=10,
+        must_include='0123456789',  # 必须包含至少一个数字
+        exclude=''
+    )
+    if pwd:
+        print(f"找到密码: {pwd}")
+        exit()
+    # ==================== 策略4：数字+小写混合，且必须包含至少一个数字（6-10位） ====================
+
+
+    # ==================== 策略5：键盘顺序小写字母（6-8位） ====================
+    # 仅使用键盘横向顺序字符，如 qwerty、asdfgh、zxcvbn
+    pwd = crack_zip_hashcat(
+        zip_path='../136758.zip',
+        charset='qwertyuiopasdfghjklzxcvbnm',
+        min_len=6,
+        max_len=8,
+        must_include='',
+        exclude=''
+    )
+    if pwd:
+        print(f"找到密码: {pwd}")
+        exit()
+    # ==================== 策略5：键盘顺序小写字母（6-8位） ====================
+
+        # ==================== 策略6：全字符集兜底（6-10位，无必须包含） ====================
+    # 当上述策略都失败时，最后尝试完整的数字+小写字母组合（搜索空间最大）
+    pwd = crack_zip_hashcat(
+        zip_path='../136758.zip',
+        charset='0123456789abcdefghijklmnopqrstuvwxyz',
+        min_len=6,
+        max_len=10,
+        must_include='',
+        exclude=''
+    )
+    if pwd:
+        print(f"找到密码: {pwd}")
+    # ==================== 策略6：全字符集兜底（6-10位，无必须包含） ====================
