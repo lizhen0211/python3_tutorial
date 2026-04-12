@@ -3,7 +3,10 @@ import os
 import re
 import sys
 import tempfile
+import threading
+import time
 from typing import Optional
+from tqdm import tqdm
 
 # ==================== 配置区域（请根据实际路径修改） ====================
 CONFIG = {
@@ -69,7 +72,6 @@ def extract_clean_hash(zip_path: str) -> Optional[str]:
     return None
 
 def read_password_from_potfile(hash_file: str) -> Optional[str]:
-    """从 potfile 中精确匹配当前哈希的密码"""
     potfile_path = os.path.join(os.path.dirname(CONFIG["hashcat_path"]), "hashcat.potfile")
     if not os.path.exists(potfile_path):
         return None
@@ -121,13 +123,16 @@ def build_base_cmd(hash_file: str, mode: int, output_file: str) -> list:
     return cmd
 
 def run_hashcat_cmd(cmd, total: int, description: str, hash_file: str):
+    """
+    执行 hashcat 命令，实时解析进度并显示 tqdm 进度条。
+    """
     print(f"[*] {description}: {' '.join(cmd)}")
     formatted_total = format_number(total)
     print(f"[*] 总尝试次数: {total:,} ({formatted_total})")
     if total > 50_000_000:
         print(f"[*] 尝试次数较多，请耐心等待...")
 
-    # 确保输出文件不存在（避免读到旧结果）
+    # 删除旧的输出文件
     output_file = None
     for i, arg in enumerate(cmd):
         if arg == "-o" and i+1 < len(cmd):
@@ -136,32 +141,91 @@ def run_hashcat_cmd(cmd, total: int, description: str, hash_file: str):
     if output_file and os.path.exists(output_file):
         os.remove(output_file)
 
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            errors='replace',
-            cwd=os.path.dirname(CONFIG["hashcat_path"]),
-            timeout=3600
-        )
-    except subprocess.TimeoutExpired:
-        print("[!] 命令执行超时（3600秒）")
-        return False, None
-    except Exception as e:
-        print(f"[!] 执行异常: {e}")
-        return False, None
+    # 启动子进程
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding='utf-8',
+        errors='replace',
+        cwd=os.path.dirname(CONFIG["hashcat_path"]),
+        bufsize=1,
+        universal_newlines=True
+    )
 
-    if result.stdout:
-        print("\n[STDOUT]")
-        print(result.stdout)
-    if result.stderr:
-        print("\n[STDERR]")
-        print(result.stderr)
+    # 准备进度条
+    pbar = tqdm(total=total, unit='pwd', unit_scale=True, desc=description, dynamic_ncols=True)
+    # 增强的正则表达式，匹配常见的进度格式
+    progress_re = re.compile(r'Progress[:\s]*(\d+)/(\d+)\s+\((\d+\.?\d*)%\)', re.IGNORECASE)
+    success_re = re.compile(r'^(\$pkzip\$[^:]+|\$zip2\$[^:]+):(.+)$')
+    found_password = None
+    stderr_lines = []
+    last_progress_time = time.time()
+    progress_received = False
+
+    def read_stderr():
+        nonlocal found_password, progress_received, last_progress_time
+        for line in process.stderr:
+            stderr_lines.append(line)
+            # 实时打印 stderr（可选，便于调试）
+            sys.stderr.write(f"[STDERR] {line}")
+            sys.stderr.flush()
+            # 检查是否已找到密码
+            sm = success_re.match(line.strip())
+            if sm:
+                found_password = sm.group(2)
+                break
+            # 匹配进度
+            match = progress_re.search(line)
+            if match:
+                current = int(match.group(1))
+                total_attempts = int(match.group(2))
+                # 更新 tqdm 的 total（以防万一）
+                if pbar.total != total_attempts:
+                    pbar.total = total_attempts
+                pbar.n = current
+                pbar.refresh()
+                progress_received = True
+                last_progress_time = time.time()
+                # 可选：打印调试信息
+                # print(f"\n[DEBUG] 进度更新: {current}/{total_attempts}")
+
+    def read_stdout():
+        for _ in process.stdout:
+            pass
+
+    t_err = threading.Thread(target=read_stderr)
+    t_out = threading.Thread(target=read_stdout)
+    t_err.daemon = True
+    t_out.daemon = True
+    t_err.start()
+    t_out.start()
+
+    # 监控进度更新，如果长时间无进展则输出诊断信息
+    start_time = time.time()
+    while process.poll() is None:
+        time.sleep(1)
+        if not progress_received and time.time() - start_time > 10:
+            print("\n[!] 警告: 10秒内未收到任何进度更新，可能 Hashcat 启动失败或输出格式不匹配。")
+            print("[!] 已捕获的 stderr 内容（最后10行）:")
+            for line in stderr_lines[-10:]:
+                print(f"    {line.rstrip()}")
+            print("[!] 请检查上述输出，常见原因：设备不支持、权限问题、哈希格式错误。")
+            # 可以选择终止进程，或者继续等待
+            break
+        if progress_received and time.time() - last_progress_time > 30:
+            print("\n[!] 警告: 30秒内无进度更新，可能 Hashcat 卡住。")
+            break
+
+    returncode = process.wait()
+    t_out.join(timeout=2)
+    t_err.join(timeout=2)
+    pbar.close()
 
     # 检查是否因为 potfile 中已有哈希而跳过
-    if "All hashes found as potfile" in result.stdout or "All hashes found as potfile" in result.stderr:
+    stderr_text = ''.join(stderr_lines)
+    if "All hashes found as potfile" in stderr_text:
         print("[*] 哈希已在 potfile 中，尝试读取密码...")
         pwd = read_password_from_potfile(hash_file)
         if pwd:
@@ -171,16 +235,19 @@ def run_hashcat_cmd(cmd, total: int, description: str, hash_file: str):
             print("[!] potfile 中存在该哈希？但读取失败")
             return False, None
 
-    if result.returncode != 0:
-        print(f"\n[!] Hashcat 返回非零状态码: {result.returncode}")
-        # 也许密码已经存在？尝试 potfile
+    if returncode != 0:
+        print(f"\n[!] Hashcat 进程异常退出，返回码: {returncode}")
         pwd = read_password_from_potfile(hash_file)
         if pwd:
             print(f"\n[+] 从 potfile 中找到密码: {pwd}")
             return True, pwd
         return False, None
 
-    # 从输出文件读取密码
+    if found_password:
+        print(f"\n[+] 破解成功！密码: {found_password}")
+        return True, found_password
+
+    # 从输出文件读取
     if output_file and os.path.exists(output_file):
         with open(output_file, 'r', encoding='utf-8', errors='ignore') as f:
             lines = f.read().strip().splitlines()
@@ -190,21 +257,11 @@ def run_hashcat_cmd(cmd, total: int, description: str, hash_file: str):
                     if pwd:
                         print(f"\n[+] 破解成功！密码: {pwd}")
                         return True, pwd
-            # 如果没有冒号，可能是纯密码
             if lines:
                 pwd = lines[-1].strip()
                 if pwd:
                     print(f"\n[+] 破解成功！密码: {pwd}")
                     return True, pwd
-
-    # 从 stdout 匹配（备用）
-    success_re = re.compile(r'^(\$pkzip\$[^:]+|\$zip2\$[^:]+):(.+)$')
-    for line in result.stdout.splitlines():
-        sm = success_re.match(line.strip())
-        if sm:
-            pwd = sm.group(2)
-            print(f"\n[+] 破解成功！密码: {pwd}")
-            return True, pwd
 
     # 最后尝试 potfile
     pwd = read_password_from_potfile(hash_file)
